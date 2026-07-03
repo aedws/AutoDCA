@@ -547,43 +547,68 @@ function renderReco(res) {
   const perLabel = wk ? "주" : "월";
   const days = wk ? 5 : 21;
 
-  // '배당금만으로 조정' 활성 시 이번 기간 배당 유입액 (신호 강한 종목에 비례 배분 = 최적 효율)
+  // '배당금만으로 조정' 활성 시 이번 기간 배당 유입액
   const divIn = divAnnualForPlan > 0 ? divAnnualForPlan / (wk ? 52 : 12) : 0;
+  const dts = holdings.filter((h) => h.divTarget);          // 배당수령(배당 전용) 지정 종목
+  const dtW = dts.reduce((s, h) => s + (h.target || 0), 0);
+  const dtShare = (sym) => { const h = dts.find((x) => x.symbol === sym); if (!h) return 0; return dtW > 0 ? (h.target || 0) / dtW : 1 / dts.length; };
+  const useTargets = divIn > 0 && dts.length > 0;           // 지정 있으면 그 종목에만 별도 배분
   const baseBuyTot = recos.reduce((s, r) => s + r.invest, 0);
+  const divAddFor = (sym, invest) => {
+    if (divIn <= 0) return 0;
+    if (useTargets) return dtShare(sym) * divIn;            // 배당수령 종목에만 별도 산정
+    return baseBuyTot > 0 ? divIn * (invest / baseBuyTot) : divIn / recos.length; // 미지정 폴백: 신호 비례
+  };
+  const badgeOf = (mult) => mult >= 1.5 ? `<span class="reco-badge badge-fear">적극매수</span>`
+    : mult >= 1 ? `<span class="reco-badge badge-buy">매수</span>`
+    : `<span class="reco-badge badge-normal">절약</span>`;
 
   let totBuy = 0;
   const rows = recos.map((r) => {
-    const divAdd = divIn > 0 ? (baseBuyTot > 0 ? divIn * (r.invest / baseBuyTot) : divIn / recos.length) : 0;
+    const divAdd = divAddFor(r.symbol, r.invest);
     const buy = r.invest + divAdd;
     totBuy += buy;
-    const daily = buy / days;
-    const badge = r.mult >= 1.5 ? `<span class="reco-badge badge-fear">적극매수</span>`
-      : r.mult >= 1 ? `<span class="reco-badge badge-buy">매수</span>`
-      : `<span class="reco-badge badge-normal">절약</span>`;
     return `<tr>
-      <td>${r.symbol}</td><td>${badge}</td>
+      <td>${r.symbol}</td><td>${badgeOf(r.mult)}</td>
       <td>${r.mult.toFixed(2)}배</td>
       <td>−${(r.dd * 100).toFixed(1)}%</td>
-      <td class="buy"><b>${fmtMoney(daily)}</b>/일</td>
+      <td class="buy"><b>${fmtMoney(buy / days)}</b>/일</td>
       <td>${fmtMoney(buy)}${divAdd > 0 ? ` <span class="dep">(배당 +${fmtMoney(divAdd)})</span>` : ""}</td>
     </tr>`;
   }).join("");
 
+  // 배당수령 지정 종목이 전략 종목에 없으면 별도 배당전용 행으로 추가
+  const legSyms = new Set(recos.map((r) => r.symbol));
+  const extras = [];
+  if (useTargets) {
+    for (const h of dts) {
+      if (legSyms.has(h.symbol)) continue;
+      const px = currentPrice(h.symbol); if (px == null) continue;
+      const amt = dtShare(h.symbol) * divIn; if (amt <= 0) continue;
+      totBuy += amt; extras.push({ symbol: h.symbol, amt });
+    }
+  }
+  const extraRows = extras.map((e) => `<tr>
+      <td>${e.symbol}</td><td><span class="reco-badge badge-buy">배당전용</span></td>
+      <td>-</td><td>-</td>
+      <td class="buy"><b>${fmtMoney(e.amt / days)}</b>/일</td>
+      <td><span class="dep">배당 +${fmtMoney(e.amt)}</span></td>
+    </tr>`).join("");
+
   const sgovDeposit = cash.sgovFlow >= 0;
   const sgovLabel = sgovDeposit ? "SGOV 예치" : "SGOV 인출";
   const sgovVal = sgovDeposit ? `<span class="dep">+${fmtMoney(cash.sgovFlow)}</span>` : `<span class="wd">−${fmtMoney(-cash.sgovFlow)}</span>`;
-  const buyLines = recos.map((r) => {
-    const divAdd = divIn > 0 ? (baseBuyTot > 0 ? divIn * (r.invest / baseBuyTot) : divIn / recos.length) : 0;
-    return `${r.symbol} <b class="buy">${fmtMoney((r.invest + divAdd) / days)}</b>/일`;
-  }).join(" · ");
+  const buyLines = recos.map((r) => `${r.symbol} <b class="buy">${fmtMoney((r.invest + divAddFor(r.symbol, r.invest)) / days)}</b>/일`)
+    .concat(extras.map((e) => `${e.symbol} <b class="buy">${fmtMoney(e.amt / days)}</b>/일`)).join(" · ");
   const inflow = fmtMoney(cash.base) + (divIn > 0 ? ` <span class="dep">+ 배당 ${fmtMoney(divIn)}</span>` : "");
+  const divNote = divIn > 0 ? (useTargets ? ` (배당 ${fmtMoney(divIn)}은 배당수령 종목 ${dts.map((h) => h.symbol).join(", ")}에 별도 투입)` : " (배당은 신호 강한 종목에 우선)") : "";
   const divStep = divIn > 0 ? `
-      <div class="flow-step"><span class="flow-k">배당 유입 (${perLabel})</span><span class="flow-v"><span class="dep">+${fmtMoney(divIn)}</span></span></div>
+      <div class="flow-step"><span class="flow-k">배당 유입 (${perLabel})${useTargets ? " → " + dts.map((h) => h.symbol).join(", ") : ""}</span><span class="flow-v"><span class="dep">+${fmtMoney(divIn)}</span></span></div>
       <div class="flow-arrow">→</div>` : "";
 
   el.innerHTML = `
     <h2>📌 실행 플랜</h2>
-    <div class="reco-sub">최신 신호(${cash.date}) 기준 · ${perLabel} 적립금 ${inflow} → 최적 효율로 배분${divIn > 0 ? " (배당은 신호 강한 종목에 우선)" : ""}</div>
+    <div class="reco-sub">최신 신호(${cash.date}) 기준 · ${perLabel} 적립금 ${inflow} → 최적 효율로 배분${divNote}</div>
     <div class="reco-flow">
       <div class="flow-step"><span class="flow-k">${perLabel} 적립금</span><span class="flow-v">${fmtMoney(cash.base)}</span></div>
       <div class="flow-arrow">→</div>
@@ -597,7 +622,7 @@ function renderReco(res) {
         <th>종목</th><th>신호</th><th>매수배수</th><th>전고점대비</th>
         <th>매일 매수액</th><th>${perLabel}간 총매수</th>
       </tr></thead>
-      <tbody>${rows}</tbody>
+      <tbody>${rows}${extraRows}</tbody>
       <tfoot><tr>
         <td>합계</td><td></td><td></td><td></td>
         <td class="buy"><b>${fmtMoney(totBuy / days)}</b>/일</td><td>${fmtMoney(totBuy)}</td>
