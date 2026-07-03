@@ -11,6 +11,13 @@ const fmtK = (v) => "$" + Math.round(v / 1000).toLocaleString("en-US") + "k";
 const fmtPct = (v, dp = 1) => (v * 100).toFixed(dp) + "%";
 const fmtPp = (v, dp = 2) => (v >= 0 ? "+" : "") + (v * 100).toFixed(dp) + "%p";
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+function fmtDur(years) {
+  if (!isFinite(years)) return "도달 불가";
+  if (years <= 0.04) return "이미 달성";
+  const y = Math.floor(years), mo = Math.round((years - y) * 12);
+  if (y === 0) return `약 ${mo}개월`;
+  return mo > 0 ? `약 ${y}년 ${mo}개월` : `약 ${y}년`;
+}
 
 const NAMES = { QQQ: "Invesco QQQ", VOO: "Vanguard S&P 500", SPY: "SPDR S&P 500", GLD: "SPDR Gold", IRX: "13주 국채금리" };
 
@@ -439,6 +446,7 @@ function metricCard(k, v, d, cls) {
   return `<div class="card"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${d ? `<div class="d">${d}</div>` : ""}</div>`;
 }
 function render(res) {
+  lastRes = res;
   const m = res.metrics, extra = res.extra;
   const irrEdge = m.irrDyn - m.irrMech;
   const cards = [];
@@ -539,10 +547,16 @@ function renderReco(res) {
   const perLabel = wk ? "주" : "월";
   const days = wk ? 5 : 21;
 
+  // '배당금만으로 조정' 활성 시 이번 기간 배당 유입액 (신호 강한 종목에 비례 배분 = 최적 효율)
+  const divIn = divAnnualForPlan > 0 ? divAnnualForPlan / (wk ? 52 : 12) : 0;
+  const baseBuyTot = recos.reduce((s, r) => s + r.invest, 0);
+
   let totBuy = 0;
   const rows = recos.map((r) => {
-    totBuy += r.invest;
-    const daily = r.invest / days;
+    const divAdd = divIn > 0 ? (baseBuyTot > 0 ? divIn * (r.invest / baseBuyTot) : divIn / recos.length) : 0;
+    const buy = r.invest + divAdd;
+    totBuy += buy;
+    const daily = buy / days;
     const badge = r.mult >= 1.5 ? `<span class="reco-badge badge-fear">적극매수</span>`
       : r.mult >= 1 ? `<span class="reco-badge badge-buy">매수</span>`
       : `<span class="reco-badge badge-normal">절약</span>`;
@@ -551,21 +565,29 @@ function renderReco(res) {
       <td>${r.mult.toFixed(2)}배</td>
       <td>−${(r.dd * 100).toFixed(1)}%</td>
       <td class="buy"><b>${fmtMoney(daily)}</b>/일</td>
-      <td>${fmtMoney(r.invest)}</td>
+      <td>${fmtMoney(buy)}${divAdd > 0 ? ` <span class="dep">(배당 +${fmtMoney(divAdd)})</span>` : ""}</td>
     </tr>`;
   }).join("");
 
   const sgovDeposit = cash.sgovFlow >= 0;
   const sgovLabel = sgovDeposit ? "SGOV 예치" : "SGOV 인출";
   const sgovVal = sgovDeposit ? `<span class="dep">+${fmtMoney(cash.sgovFlow)}</span>` : `<span class="wd">−${fmtMoney(-cash.sgovFlow)}</span>`;
-  const buyLines = recos.map((r) => `${r.symbol} <b class="buy">${fmtMoney(r.invest / days)}</b>/일`).join(" · ");
+  const buyLines = recos.map((r) => {
+    const divAdd = divIn > 0 ? (baseBuyTot > 0 ? divIn * (r.invest / baseBuyTot) : divIn / recos.length) : 0;
+    return `${r.symbol} <b class="buy">${fmtMoney((r.invest + divAdd) / days)}</b>/일`;
+  }).join(" · ");
+  const inflow = fmtMoney(cash.base) + (divIn > 0 ? ` <span class="dep">+ 배당 ${fmtMoney(divIn)}</span>` : "");
+  const divStep = divIn > 0 ? `
+      <div class="flow-step"><span class="flow-k">배당 유입 (${perLabel})</span><span class="flow-v"><span class="dep">+${fmtMoney(divIn)}</span></span></div>
+      <div class="flow-arrow">→</div>` : "";
 
   el.innerHTML = `
     <h2>📌 실행 플랜</h2>
-    <div class="reco-sub">최신 신호(${cash.date}) 기준 · ${perLabel} 적립금 ${fmtMoney(cash.base)}가 들어오면 아래처럼 배분하세요.</div>
+    <div class="reco-sub">최신 신호(${cash.date}) 기준 · ${perLabel} 적립금 ${inflow} → 최적 효율로 배분${divIn > 0 ? " (배당은 신호 강한 종목에 우선)" : ""}</div>
     <div class="reco-flow">
       <div class="flow-step"><span class="flow-k">${perLabel} 적립금</span><span class="flow-v">${fmtMoney(cash.base)}</span></div>
       <div class="flow-arrow">→</div>
+      ${divStep}
       <div class="flow-step"><span class="flow-k">${sgovLabel} (잔고 ${fmtMoney(cash.balance)})</span><span class="flow-v">${sgovVal}</span></div>
       <div class="flow-arrow">→</div>
       <div class="flow-step wide"><span class="flow-k">매일 매수 (약 ${days}거래일)</span><span class="flow-v">${buyLines}</span></div>
@@ -626,7 +648,7 @@ function renderHoldRows() {
       <td><input class="ha" type="number" min="0" step="0.01" value="${h.avg}" data-i="${i}"/></td>
       <td class="px">-</td><td class="val">-</td><td class="wt">-</td><td class="pl">-</td>
       <td><input class="ht" type="number" min="0" step="1" value="${h.target}" data-i="${i}"/></td>
-      <td><input class="hd" type="checkbox" data-i="${i}" ${h.divTarget ? "checked" : ""} title="배당금을 이 종목으로 재투자"/></td>
+      <td><input class="hd" type="checkbox" data-i="${i}" ${h.divTarget ? "checked" : ""} ${(document.getElementById("hrMode") || {}).value === "div" ? "" : "disabled"} title="'배당금만으로 조정' 모드에서만 사용"/></td>
       <td><button class="rm" data-i="${i}">×</button></td>
     </tr>`).join("");
   tb.querySelectorAll(".hq").forEach((el) => el.addEventListener("input", () => { holdings[+el.dataset.i].qty = Math.max(0, +el.value || 0); updateMyPort(); }));
@@ -682,54 +704,36 @@ function updateMyPort() {
     document.getElementById("donutLegend").innerHTML = "<div class='proj-sub'>수량을 입력하면 도넛이 표시됩니다.</div>";
   }
 
+  // 연 배당 합계
+  let annualTot = 0;
+  for (const x of items) { if (x.px != null && x.qty > 0) { const d = divInfo(x.symbol); if (d.has) annualTot += x.qty * d.annual; } }
+
   // 조정안
-  renderRebalPlan(items, totVal, useEqual);
-  // 배당 & 재투자
-  renderDividends(items, totVal, useEqual);
+  renderRebalPlan(items, totVal, useEqual, annualTot);
+  // 배당 & 재투자 (정보)
+  renderDividends(items, totVal, annualTot);
+
+  // '배당금만으로 조정' 활성 시 → 실행 플랜에 배당 유입 합산
+  const hrMode = (document.getElementById("hrMode") || {}).value;
+  divAnnualForPlan = (hrMode === "div" && annualTot > 0) ? annualTot : 0;
+  if (lastRes) renderReco(lastRes);
 }
 
-function renderDividends(items, totVal, useEqual) {
-  const el = document.getElementById("divPanel");
-  const valid = items.filter((x) => x.px != null && x.qty > 0);
-  const info = valid.map((x) => ({ x, d: divInfo(x.symbol) })).filter((r) => r.d.has);
-  if (!info.length) { el.innerHTML = ""; return; }
-
-  let annualTot = 0;
-  const rows = info.map(({ x, d }) => {
-    const perPay = x.qty * d.perShare;   // 내 회당 배당
-    const annual = x.qty * d.annual;     // 내 연 배당
-    annualTot += annual;
-    const fmt2 = (v) => "$" + v.toFixed(2);
-    return `<tr>
-      <td class="sym">${x.symbol}</td>
-      <td>${d.label}</td>
-      <td>${fmt2(d.perShare)}/주</td>
-      <td>${fmt2(perPay)}</td>
-      <td class="buy">${fmtMoney(annual)}</td>
-      <td>${(d.yield * 100).toFixed(2)}%</td>
-    </tr>`;
-  }).join("");
-
-  // 배당 재투자(이동) 플랜
+// '배당금만으로 조정' — 목표 비중으로 조정 섹션에 표시되는 배당 재투자 플랜 + 도달 시간
+function renderDivPlan(el, items, valid, totVal, useEqual, annualTot) {
   const targets = items.filter((x) => x.divTarget && x.px != null);
   let planRows, note;
   if (targets.length) {
-    // 배당금으로만 매수: 지정 종목에 전액 몰아주기 (목표% 비율로 분배)
     const tw = targets.reduce((s, x) => s + (x.target || 0), 0);
     planRows = targets.map((x) => {
       const share = tw > 0 ? (x.target / tw) : 1 / targets.length;
       const amt = annualTot * share;
-      return `<tr>
-        <td class="sym">${x.symbol}</td>
+      return `<tr><td class="sym">${x.symbol}</td>
         <td>${totVal > 0 ? (x.val / totVal * 100).toFixed(1) : "0.0"}%</td>
-        <td>배당전용</td>
-        <td class="buy">+${fmtMoney(amt)}</td>
-        <td>+${(amt / x.px).toFixed(2)}주</td>
-      </tr>`;
+        <td>배당전용</td><td class="buy">+${fmtMoney(amt)}</td><td>+${(amt / x.px).toFixed(2)}주</td></tr>`;
     }).join("");
-    note = `배당 전용 투자 — 연 배당 <b>${fmtMoney(annualTot)}</b> 전액을 <b>${targets.map((x) => x.symbol).join(", ")}</b>${targets.length > 1 ? " (목표% 비율)" : ""} 매수에 사용`;
+    note = `연 배당 <b>${fmtMoney(annualTot)}</b> 전액을 <b>${targets.map((x) => x.symbol).join(", ")}</b>${targets.length > 1 ? " (목표% 비율)" : ""} 매수에 사용`;
   } else {
-    // 지정 없음: 목표 비중 맞춰 저비중에 재배분
     const totW = useEqual ? valid.length : valid.reduce((s, x) => s + x.target, 0) || valid.length;
     const wOf = (x) => useEqual || totW === valid.length ? 1 / valid.length : (x.target / totW);
     const newV = totVal + annualTot;
@@ -737,34 +741,73 @@ function renderDividends(items, totVal, useEqual) {
     const needSum = need.reduce((s, v) => s + v, 0);
     planRows = valid.map((x, i) => {
       const amt = needSum > 0 ? annualTot * need[i] / needSum : annualTot * wOf(x);
-      return `<tr>
-        <td class="sym">${x.symbol}</td>
+      return `<tr><td class="sym">${x.symbol}</td>
         <td>${(x.val / totVal * 100).toFixed(1)}%</td>
         <td>${(wOf(x) * 100).toFixed(1)}%</td>
-        <td class="buy">+${fmtMoney(amt)}</td>
-        <td>+${(amt / x.px).toFixed(2)}주</td>
-      </tr>`;
+        <td class="buy">+${fmtMoney(amt)}</td><td>+${(amt / x.px).toFixed(2)}주</td></tr>`;
     }).join("");
-    note = `배당금 이동 플랜 — 연 배당 <b>${fmtMoney(annualTot)}</b>을 목표 비중 맞춰 저비중 종목에 재투자 (매도 없음). 특정 종목에만 투자하려면 "배당수령"을 체크하세요.`;
+    note = `연 배당 <b>${fmtMoney(annualTot)}</b>을 목표 비중 맞춰 저비중 종목에 재투자. 특정 종목에만 몰아주려면 위 표에서 <b>배당수령</b>을 체크하세요.`;
   }
 
-  const annualYield = totVal > 0 ? annualTot / totVal : 0;
+  // 도달 시간
+  const allT = items.filter((x) => x.px != null);
+  const sumTgt = allT.reduce((s, x) => s + (x.target || 0), 0);
+  const wAll = (x) => (sumTgt > 0 ? (x.target || 0) / sumTgt : 1 / allT.length);
+  let years, timeNote, extraNote = "";
+  if (annualTot <= 0) { years = Infinity; timeNote = "배당이 없어 도달 불가"; }
+  else if (targets.length) {
+    const Wt = targets.reduce((s, x) => s + wAll(x), 0);
+    const Vt = targets.reduce((s, x) => s + x.val, 0);
+    years = Wt >= 1 ? 0 : Math.max(0, (Wt * totVal - Vt) / (annualTot * (1 - Wt)));
+    timeNote = `배당수령 종목(${targets.map((x) => x.symbol).join(", ")}) 비중이 목표(${(Wt * 100).toFixed(0)}%)에 도달`;
+  } else {
+    let vFin = totVal;
+    for (const x of allT) { const w = wAll(x); if (w > 0) vFin = Math.max(vFin, x.val / w); }
+    const needCash = Math.max(0, vFin - totVal);
+    years = needCash / annualTot;
+    timeNote = "저비중 종목이 목표 비중에 도달 (매도 없이 배당만)";
+    if (needCash > 0) extraNote = ` · 필요 누적배당 ${fmtMoney(needCash)}`;
+  }
+
   el.innerHTML = `
-    <div class="wt-head"><h3 style="margin:0;font-size:14px">💵 배당 & 재투자</h3>
-      <span class="legend-hint">연 배당 합계 ${fmtMoney(annualTot)} · 포트폴리오 배당률 ${(annualYield * 100).toFixed(2)}%</span></div>
+    <div class="div-eta">
+      <span class="eta-k">⏳ 배당금만으로 목표 비중 도달</span>
+      <span class="eta-v">${fmtDur(years)}</span>
+      <span class="eta-note">${timeNote}${extraNote}<br>(현재가·현재 연배당 ${fmtMoney(annualTot)} 고정 가정, 배당 성장·복리 미반영)</span>
+    </div>
+    <div class="proj-sub">${note}</div>
     <table class="reco-table">
-      <thead><tr><th>종목</th><th>지급주기</th><th>회당(주당)</th><th>내 회당 배당</th><th>내 연 배당</th><th>배당률</th></tr></thead>
-      <tbody>${rows}</tbody>
-    </table>
-    <div class="proj-sub" style="margin-top:12px">${note}</div>
-    <table class="reco-table">
-      <thead><tr><th>종목</th><th>현재비중</th><th>${targets.length ? "구분" : "목표비중"}</th><th>재투자 배분</th><th>주수</th></tr></thead>
+      <thead><tr><th>종목</th><th>현재비중</th><th>${targets.length ? "구분" : "목표비중"}</th><th>배당 재투자 배분</th><th>주수</th></tr></thead>
       <tbody>${planRows}</tbody>
       <tfoot><tr><td>합계</td><td></td><td></td><td class="buy">+${fmtMoney(annualTot)}</td><td></td></tr></tfoot>
     </table>`;
 }
 
-function renderRebalPlan(items, totVal, useEqual) {
+// 배당 정보(주기·배당률·내 배당) — 항상 표시되는 참고 패널
+function renderDividends(items, totVal, annualTot) {
+  const el = document.getElementById("divPanel");
+  const info = items.filter((x) => x.px != null && x.qty > 0).map((x) => ({ x, d: divInfo(x.symbol) })).filter((r) => r.d.has);
+  if (!info.length) { el.innerHTML = ""; return; }
+  const fmt2 = (v) => "$" + v.toFixed(2);
+  const rows = info.map(({ x, d }) => `<tr>
+      <td class="sym">${x.symbol}</td>
+      <td>${d.label}</td>
+      <td>${fmt2(d.perShare)}/주</td>
+      <td>${fmt2(x.qty * d.perShare)}</td>
+      <td class="buy">${fmtMoney(x.qty * d.annual)}</td>
+      <td>${(d.yield * 100).toFixed(2)}%</td>
+    </tr>`).join("");
+  const annualYield = totVal > 0 ? annualTot / totVal : 0;
+  el.innerHTML = `
+    <div class="wt-head"><h3 style="margin:0;font-size:14px">💵 배당 정보</h3>
+      <span class="legend-hint">연 배당 합계 ${fmtMoney(annualTot)} · 포트폴리오 배당률 ${(annualYield * 100).toFixed(2)}% · 재투자 플랜은 위 '목표 비중으로 조정'에서 <b>배당금만으로 조정</b> 선택</span></div>
+    <table class="reco-table">
+      <thead><tr><th>종목</th><th>지급주기</th><th>회당(주당)</th><th>내 회당 배당</th><th>내 연 배당</th><th>배당률</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function renderRebalPlan(items, totVal, useEqual, annualTot) {
   const el = document.getElementById("rebalPlan");
   const valid = items.filter((x) => x.px != null);
   if (!valid.length || totVal <= 0) { el.innerHTML = "<div class='proj-sub'>보유 수량·평단을 입력하세요.</div>"; return; }
@@ -772,6 +815,9 @@ function renderRebalPlan(items, totVal, useEqual) {
   const wOf = (x) => useEqual ? 1 / valid.length : (x.target / totW);
   const mode = document.getElementById("hrMode").value;
   const cash = Math.max(0, +document.getElementById("hrCash").value || 0);
+
+  // 배당금만으로 조정 (배당 재투자)
+  if (mode === "div") { renderDivPlan(el, items, valid, totVal, useEqual, annualTot || 0); return; }
 
   let plan = [];
   if (mode === "contrib") {
@@ -830,6 +876,8 @@ async function addHolding(str) {
 let legs = [{ symbol: "QQQ", name: NAMES.QQQ, weight: 1 }];
 let currentMode = "extra";
 let currentFreq = "monthly";
+let divAnnualForPlan = 0; // '배당금만으로 조정' 활성 시 실행 플랜에 합산할 연 배당액
+let lastRes = null;       // 최근 백테스트 결과 (실행 플랜 재렌더용)
 
 function readParams() {
   return {
@@ -996,6 +1044,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("holdInput").addEventListener("keydown", (e) => { if (e.key === "Enter") addHolding(e.target.value); });
   document.getElementById("hrMode").addEventListener("change", () => {
     document.getElementById("hrCashWrap").style.display = document.getElementById("hrMode").value === "contrib" ? "flex" : "none";
+    renderHoldRows(); // 배당수령 체크박스 활성/비활성 갱신
     updateMyPort();
   });
   document.getElementById("hrCash").addEventListener("input", updateMyPort);

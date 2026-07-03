@@ -49,6 +49,10 @@ body {
 .donut-legend .dl-left { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .donut-legend .dl-dot { width: 12px; height: 12px; border-radius: 4px; }
 .myport-rebal { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.div-eta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; background: var(--panel2); border: 1px solid var(--accent); border-radius: 10px; padding: 12px 16px; margin: 12px 0; }
+.div-eta .eta-k { font-size: 13px; color: var(--muted); }
+.div-eta .eta-v { font-size: 22px; font-weight: 800; color: var(--accent); }
+.div-eta .eta-note { font-size: 11px; color: var(--muted); flex: 1; min-width: 200px; }
 
 .layout { display: grid; grid-template-columns: 300px 1fr; gap: 20px; padding: 20px; align-items: start; }
 @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
