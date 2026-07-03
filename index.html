@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>동적 DCA 백테스트 — 기계식 vs 동적</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>Reserve-Backed 동적 DCA <span class="sub">기계식(정액) vs 동적 비교 백테스트</span></h1>
+  </header>
+
+  <section class="myport">
+    <div class="myport-head">
+      <h2>💼 내 현재 포트폴리오</h2>
+      <span class="legend-hint">보유 종목·수량·평단을 입력하면 현재 비중(도넛)과 목표 대비 조정안을 계산합니다.</span>
+    </div>
+    <div class="myport-body">
+      <div class="myport-left">
+        <table class="hold-table">
+          <thead><tr>
+            <th>종목</th><th>수량</th><th>평단</th><th>현재가</th><th>평가액</th><th>비중</th><th>손익</th><th>목표%</th><th title="배당금으로 매수할 종목">배당수령</th><th></th>
+          </tr></thead>
+          <tbody id="holdBody"></tbody>
+        </table>
+        <div class="inline" style="margin-top:8px">
+          <input type="text" id="holdInput" placeholder="보유 종목 추가 (예: CHPY, SPYI)" autocomplete="off" />
+          <button id="addHold" class="mini" style="flex:0 0 auto;padding:8px 12px">추가</button>
+        </div>
+        <div id="holdStatus" class="proj-sub"></div>
+        <div id="holdSummary" class="hold-summary"></div>
+      </div>
+      <div class="myport-right">
+        <canvas id="donut"></canvas>
+        <div id="donutLegend" class="donut-legend"></div>
+      </div>
+    </div>
+    <div class="myport-rebal">
+      <div class="wt-head">
+        <h3 style="margin:0;font-size:14px">목표 비중으로 조정</h3>
+        <div class="inline" style="flex:0 0 auto;gap:6px">
+          <button class="mini" id="tgtEqual" style="flex:0 0 auto;padding:5px 10px">목표=동일비중</button>
+          <button class="mini" id="tgtStrategy" style="flex:0 0 auto;padding:5px 10px">목표=전략비중</button>
+        </div>
+      </div>
+      <div class="inline" style="margin:10px 0;gap:10px;flex-wrap:wrap">
+        <select id="hrMode" style="flex:1;min-width:200px">
+          <option value="trim">전량 조정 (초과분 매도→목표 복원)</option>
+          <option value="contrib">신규 투입금으로만 조정 (매도 없음)</option>
+          <option value="shift">부분 이동 (격차 50%만 조정)</option>
+        </select>
+        <div class="inline" id="hrCashWrap" style="flex:0 0 auto;display:none">
+          <span class="unit">투입금</span>
+          <input type="number" id="hrCash" value="1000" min="0" step="100" style="width:110px" />
+          <span class="unit">$</span>
+        </div>
+      </div>
+      <div id="rebalPlan"></div>
+    </div>
+    <div class="myport-rebal" id="divPanel"></div>
+  </section>
+
+  <main class="layout">
+    <!-- 컨트롤 패널 -->
+    <aside class="panel">
+      <div class="field">
+        <label>종목 (2개 이상이면 포트폴리오)</label>
+        <div class="inline">
+          <input type="text" id="tickerInput" placeholder="예: SPY, TQQQ, GLD" autocomplete="off" />
+          <button id="addTicker" class="mini" style="flex:0 0 auto; padding:8px 12px">추가</button>
+        </div>
+        <div id="tickerList" class="ticker-list"></div>
+        <div class="inline" style="margin-top:6px">
+          <button class="mini" data-quick="QQQ">+QQQ</button>
+          <button class="mini" data-quick="VOO">+VOO</button>
+          <button class="mini" data-quick="SPY">+SPY</button>
+          <button class="mini" data-quick="GLD">+GLD</button>
+        </div>
+        <small id="tickerStatus"></small>
+      </div>
+
+      <div class="field">
+        <label>기간 (시작 ~ 종료)</label>
+        <input type="date" id="startSel" />
+        <input type="date" id="endSel" style="margin-top:6px" />
+        <div class="inline" style="margin-top:6px">
+          <button class="mini" data-preset="all">전체</button>
+          <button class="mini" data-preset="10y">최근 10년</button>
+          <button class="mini" data-preset="5y">최근 5년</button>
+        </div>
+        <small id="rangeHint"></small>
+      </div>
+
+      <div class="field">
+        <label>예산 모델</label>
+        <div class="segmented" id="modeSeg">
+          <button data-mode="reserve">총원금 동일<br><small>리저브</small></button>
+          <button data-mode="extra" class="active">하락 시 추가금<br><small>IRR 비교</small></button>
+        </div>
+        <small id="modeHint"></small>
+      </div>
+
+      <div class="field">
+        <label>적립 주기</label>
+        <div class="segmented" id="freqSeg">
+          <button data-freq="monthly" class="active">월납</button>
+          <button data-freq="weekly">주납</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <label id="baseLabel">월 적립금 (기본 B)</label>
+        <div class="inline">
+          <input type="number" id="baseAmt" value="1000" min="1" step="100" />
+          <span class="unit" id="baseUnit">$/월</span>
+        </div>
+      </div>
+
+      <hr />
+      <div class="section-title">동적 규칙 파라미터</div>
+
+      <div class="field">
+        <label>이동평균 기간 <b id="smaVal">200</b>일</label>
+        <input type="range" id="smaWin" min="20" max="300" step="10" value="200" />
+      </div>
+
+      <div class="field">
+        <label>이격도 민감도 k = <b id="kVal">3.0</b></label>
+        <input type="range" id="kDev" min="0" max="8" step="0.5" value="3" />
+        <small>200일선 대비 쌀수록 더 많이 매수</small>
+      </div>
+
+      <div class="field">
+        <label>낙폭 가중 강도 = <b id="ddVal">1.0</b>×</label>
+        <input type="range" id="ddScale" min="0" max="3" step="0.25" value="1" />
+        <small>전고점 −10/−20/−30% 계단식 보너스 배율</small>
+      </div>
+
+      <div class="field">
+        <label>최대 매수 배수 M_max = <b id="mmaxVal">4.0</b>×</label>
+        <input type="range" id="mMax" min="1" max="8" step="0.5" value="4" />
+      </div>
+
+      <div class="field">
+        <label>최소 매수 배수 = <b id="mminVal">0.0</b>×</label>
+        <input type="range" id="mMin" min="0" max="1" step="0.1" value="0" />
+        <small>상승장에서 최소한 이만큼은 매수(현금 드래그 조절)</small>
+      </div>
+
+      <div class="field checkbox">
+        <label><input type="checkbox" id="rsvInterest" checked /> 리저브를 SGOV(단기국채) 이자로 운용</label>
+      </div>
+
+      <hr />
+      <div class="section-title">자동 리밸런싱 (포트폴리오)</div>
+      <div class="field checkbox">
+        <label><input type="checkbox" id="rebalOn" /> 자동 리밸런싱 ON</label>
+      </div>
+      <div class="field" id="rebalOpts" style="display:none">
+        <label>방식</label>
+        <select id="rebalMode">
+          <option value="contrib">적립금 드리프트 (매도 없이 신규자금으로 조정)</option>
+          <option value="trim">주기적 절삭 (초과분 매도→목표 복원)</option>
+          <option value="shift">저평가 이동 (주기적 부분 이동 50%)</option>
+        </select>
+        <div class="inline" id="rebalPeriodWrap" style="margin-top:8px">
+          <span class="unit">주기</span>
+          <input type="number" id="rebalPeriod" value="12" min="1" step="1" />
+          <span class="unit">개월</span>
+        </div>
+        <small id="rebalHint"></small>
+      </div>
+
+      <button id="runBtn" class="run">백테스트 실행</button>
+      <div class="note" id="dataNote"></div>
+    </aside>
+
+    <!-- 결과 -->
+    <section class="content">
+      <div class="cards" id="metrics"></div>
+
+      <div class="wt-card" id="weights"></div>
+
+      <div class="reco-card" id="reco"></div>
+
+      <div class="wt-card" id="projection"></div>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h2>자산가치 추이</h2>
+          <div class="legend-hint">동적 = 주식 평가액 + 리저브</div>
+        </div>
+        <canvas id="equityChart"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h2>매수 배수 & 리저브 비중</h2>
+          <div class="legend-hint">언제 몰빵/절약했는지</div>
+        </div>
+        <canvas id="signalChart"></canvas>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-head">
+          <h2>달러효율 — 투입원금 1달러당 자산가치</h2>
+          <div class="legend-hint">예산모델이 달라도 공정 비교</div>
+        </div>
+        <canvas id="effChart"></canvas>
+      </div>
+    </section>
+  </main>
+
+  <script src="chart.umd.min.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "dynamic-dca-backtest",
+  "version": "1.0.0",
+  "private": true,
+  "description": "기계식 vs 동적 DCA 백테스트 (QQQ/VOO 등 임의 티커 + 포트폴리오)",
+  "scripts": {
+    "build-data": "node build_data.js",
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
