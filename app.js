@@ -248,11 +248,14 @@ function runPortfolio(legs, params) {
   const mSh = Array(N).fill(0), dSh = Array(N).fill(0);
   let reserve = 0, investedM = 0, investedD = 0;
   const flowsM = [], flowsD = [];
-  const series = { labels: [], mech: [], dyn: [], contribM: [], contribD: [], mult: [], second: [], reserveAmt: [], effM: [], effD: [] };
+  const series = { labels: [], mech: [], dyn: [], contribM: [], contribD: [], mult: [], second: [], reserveAmt: [], effM: [], effD: [], price: [], avgM: [], avgD: [] };
   let started = false, prevKey = null, prevRebalKey = null;
   let maxMech = 0, maxDyn = 0, mddMech = 0, mddDyn = 0, rsvSum = 0, rsvCount = 0;
   let recos = [], recoCash = null;
   const px = Array(N), smaV = Array(N), athV = Array(N);
+  // 평단(평균 매입가) 차트용: 합성 가격지수 PI 기준 유닛 누적
+  const refPx = new Array(N).fill(null);
+  let mUnits = 0, dUnits = 0, spentD = 0, PInow = 1, base = 100;
 
   for (let i = 0; i < master.length; i++) {
     const t = master[i], dObj = new Date(t);
@@ -317,6 +320,13 @@ function runPortfolio(legs, params) {
       flowsD.push({ t, cf: extra ? -actualInvestTotal : -B });
       reserve += B - recoInvestTotal;
 
+      // 평단: 합성 가격지수(PI) 기준 매입 유닛 누적
+      if (refPx[0] == null) { for (let k = 0; k < N; k++) refPx[k] = px[k]; base = N === 1 ? refPx[0] : 100; }
+      PInow = 0; for (let k = 0; k < N; k++) PInow += w[k] * px[k] / refPx[k];
+      mUnits += B / PInow;                 // 기계식: 매기 B 전액 매수
+      spentD += actualInvestTotal;         // 동적: 실제 주식 매수액 누적
+      dUnits += actualInvestTotal / PInow;
+
       // 주기적 리밸런싱 (trim/shift): 보유 자산 재조정 (현금흐름 없음)
       let rebalKey = null;
       if (rebalOn && (rebalMode === "trim" || rebalMode === "shift")) {
@@ -355,6 +365,9 @@ function runPortfolio(legs, params) {
       series.second.push(extra ? (investedM > 0 ? investedD / investedM : 1) : (dVal > 0 ? reserve / dVal : 0));
       series.effM.push(investedM > 0 ? mVal / investedM : 1);
       series.effD.push(investedD > 0 ? dVal / investedD : 1);
+      series.price.push(PInow * base);
+      series.avgM.push(mUnits > 0 ? investedM / mUnits * base : null);
+      series.avgD.push(dUnits > 0 ? spentD / dUnits * base : null);
     }
     maxMech = Math.max(maxMech, mVal); mddMech = Math.max(mddMech, (maxMech - mVal) / maxMech);
     maxDyn = Math.max(maxDyn, dVal); mddDyn = Math.max(mddDyn, (maxDyn - dVal) / maxDyn);
@@ -372,7 +385,7 @@ function runPortfolio(legs, params) {
   const n = series.labels.length;
 
   return {
-    extra, series, flowsM, flowsD, recos, recoCash, legInfo,
+    extra, series, flowsM, flowsD, recos, recoCash, legInfo, singleTicker: N === 1,
     metrics: {
       investedM, investedD, finalMech, finalDyn,
       effMech: finalMech / investedM, effDyn: finalDyn / investedD,
@@ -441,7 +454,7 @@ function projectFuture(legs, params) {
 }
 
 // ---------- 렌더링 ----------
-let equityChart, signalChart, effChart;
+let equityChart, signalChart, effChart, costChart;
 function metricCard(k, v, d, cls) {
   return `<div class="card"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div>${d ? `<div class="d">${d}</div>` : ""}</div>`;
 }
@@ -502,6 +515,24 @@ function render(res) {
     options: { responsive: true, interaction: { mode: "index", intersect: false },
       plugins: { legend: { labels: { color: "#e6edf3" } }, tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + c.parsed.y.toFixed(3) + "배" } } },
       scales: { x: { grid, ticks: tick }, y: { grid, ticks: { color: "#8b949e", callback: (v) => v.toFixed(1) + "x" } } } },
+  });
+
+  // 주가 & 평단
+  const single = res.singleTicker;
+  const priceLabel = single ? `${m.composition} 주가` : "포트폴리오 지수";
+  const yFmt = single ? (v) => "$" + Math.round(v) : (v) => v.toFixed(0);
+  document.getElementById("costChartTitle").textContent = single ? `주가 & 평단 (${m.composition})` : "포트폴리오 지수 & 평단 (기준=100)";
+  costChart?.destroy();
+  costChart = new Chart(document.getElementById("costChart"), {
+    type: "line",
+    data: { labels: s.labels, datasets: [
+      { label: priceLabel, data: s.price, borderColor: "#8b949e", borderWidth: 1.5, pointRadius: 0, tension: 0.1 },
+      { label: "동적 DCA 평단", data: s.avgD, borderColor: "#58a6ff", backgroundColor: "#58a6ff22", borderWidth: 2, pointRadius: 0, tension: 0.1, fill: false },
+      { label: "기계식 평단", data: s.avgM, borderColor: "#3fb950", borderWidth: 2, pointRadius: 0, tension: 0.1 },
+    ] },
+    options: { responsive: true, interaction: { mode: "index", intersect: false },
+      plugins: { legend: { labels: { color: "#e6edf3" } }, tooltip: { callbacks: { label: (c) => c.dataset.label + ": " + (single ? "$" + c.parsed.y.toFixed(2) : c.parsed.y.toFixed(1)) } } },
+      scales: { x: { grid, ticks: tick }, y: { grid, ticks: { color: "#8b949e", callback: yFmt } } } },
   });
 }
 
